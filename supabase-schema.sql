@@ -1,18 +1,41 @@
 -- FreqMarks table sync schema for Supabase
--- Default password: fpv58
+-- Default admin key: fpv58
 -- SHA-256(fpv58): c415fa767c6a3edc746874be3aa962663421a7db9ed7f1823b07349e72cd90de
+-- Default user key: fpv58-view
+-- SHA-256(fpv58-view): abb7c56cc8ed32665f024679d7d18dcb76bde32c580c2396be3a0465b007ab8d
 
 create extension if not exists pgcrypto;
 
 create table if not exists public.page_access (
   id integer primary key default 1 check (id = 1),
-  password_hash text not null,
+  password_hash text,
+  admin_key_hash text,
+  viewer_key_hash text,
   updated_at timestamptz not null default now()
 );
 
-insert into public.page_access (id, password_hash)
-values (1, 'c415fa767c6a3edc746874be3aa962663421a7db9ed7f1823b07349e72cd90de')
+alter table public.page_access add column if not exists password_hash text;
+alter table public.page_access add column if not exists admin_key_hash text;
+alter table public.page_access add column if not exists viewer_key_hash text;
+
+insert into public.page_access (id, password_hash, admin_key_hash, viewer_key_hash)
+values (
+  1,
+  'c415fa767c6a3edc746874be3aa962663421a7db9ed7f1823b07349e72cd90de',
+  'c415fa767c6a3edc746874be3aa962663421a7db9ed7f1823b07349e72cd90de',
+  'abb7c56cc8ed32665f024679d7d18dcb76bde32c580c2396be3a0465b007ab8d'
+)
 on conflict (id) do nothing;
+
+update public.page_access
+set
+  password_hash = coalesce(password_hash, admin_key_hash, 'c415fa767c6a3edc746874be3aa962663421a7db9ed7f1823b07349e72cd90de'),
+  admin_key_hash = coalesce(admin_key_hash, password_hash, 'c415fa767c6a3edc746874be3aa962663421a7db9ed7f1823b07349e72cd90de'),
+  viewer_key_hash = coalesce(viewer_key_hash, 'abb7c56cc8ed32665f024679d7d18dcb76bde32c580c2396be3a0465b007ab8d')
+where id = 1;
+
+alter table public.page_access alter column admin_key_hash set not null;
+alter table public.page_access alter column viewer_key_hash set not null;
 
 create table if not exists public.app_settings (
   id integer primary key default 1 check (id = 1),
@@ -75,6 +98,68 @@ begin
 end;
 $$;
 
+create or replace function public.get_request_header(header_name text)
+returns text
+language plpgsql
+stable
+as $$
+declare
+  headers json;
+begin
+  begin
+    headers := current_setting('request.headers', true)::json;
+  exception when others then
+    return null;
+  end;
+
+  return coalesce(headers ->> lower(header_name), headers ->> header_name);
+end;
+$$;
+
+create or replace function public.check_access_key(attempt_key text)
+returns text
+language plpgsql
+security definer
+set search_path = public
+as $$
+declare
+  attempt_hash text;
+  matched_role text;
+begin
+  attempt_hash := encode(digest(coalesce(attempt_key, ''), 'sha256'), 'hex');
+
+  select case
+    when attempt_hash = admin_key_hash then 'admin'
+    when attempt_hash = viewer_key_hash then 'viewer'
+    else null
+  end
+  into matched_role
+  from public.page_access
+  where id = 1;
+
+  return matched_role;
+end;
+$$;
+
+create or replace function public.is_admin_request()
+returns boolean
+language sql
+stable
+security definer
+set search_path = public
+as $$
+  select exists (
+    select 1
+    from public.page_access
+    where id = 1
+      and admin_key_hash = encode(digest(coalesce(public.get_request_header('x-freqmarks-access-key'), ''), 'sha256'), 'hex')
+  );
+$$;
+
+grant execute on function public.get_request_header(text) to anon;
+grant execute on function public.check_access_key(text) to anon;
+grant execute on function public.is_admin_request() to anon;
+
 drop trigger if exists page_access_touch_updated_at on public.page_access;
 create trigger page_access_touch_updated_at
 before update on public.page_access
@@ -113,12 +198,6 @@ alter table public.legend_items enable row level security;
 alter table public.notes enable row level security;
 
 drop policy if exists "page_access_read_all" on public.page_access;
-create policy "page_access_read_all"
-on public.page_access
-for select
-to anon
-using (true);
-
 drop policy if exists "app_settings_read_all" on public.app_settings;
 create policy "app_settings_read_all"
 on public.app_settings
@@ -127,19 +206,21 @@ to anon
 using (true);
 
 drop policy if exists "app_settings_insert_all" on public.app_settings;
-create policy "app_settings_insert_all"
+drop policy if exists "app_settings_admin_insert" on public.app_settings;
+create policy "app_settings_admin_insert"
 on public.app_settings
 for insert
 to anon
-with check (true);
+with check (public.is_admin_request());
 
 drop policy if exists "app_settings_update_all" on public.app_settings;
-create policy "app_settings_update_all"
+drop policy if exists "app_settings_admin_update" on public.app_settings;
+create policy "app_settings_admin_update"
 on public.app_settings
 for update
 to anon
-using (true)
-with check (true);
+using (public.is_admin_request())
+with check (public.is_admin_request());
 
 drop policy if exists "band_channels_read_all" on public.band_channels;
 create policy "band_channels_read_all"
@@ -149,19 +230,21 @@ to anon
 using (true);
 
 drop policy if exists "band_channels_insert_all" on public.band_channels;
-create policy "band_channels_insert_all"
+drop policy if exists "band_channels_admin_insert" on public.band_channels;
+create policy "band_channels_admin_insert"
 on public.band_channels
 for insert
 to anon
-with check (true);
+with check (public.is_admin_request());
 
 drop policy if exists "band_channels_update_all" on public.band_channels;
-create policy "band_channels_update_all"
+drop policy if exists "band_channels_admin_update" on public.band_channels;
+create policy "band_channels_admin_update"
 on public.band_channels
 for update
 to anon
-using (true)
-with check (true);
+using (public.is_admin_request())
+with check (public.is_admin_request());
 
 drop policy if exists "cell_marks_read_all" on public.cell_marks;
 create policy "cell_marks_read_all"
@@ -171,26 +254,29 @@ to anon
 using (true);
 
 drop policy if exists "cell_marks_insert_all" on public.cell_marks;
-create policy "cell_marks_insert_all"
+drop policy if exists "cell_marks_admin_insert" on public.cell_marks;
+create policy "cell_marks_admin_insert"
 on public.cell_marks
 for insert
 to anon
-with check (true);
+with check (public.is_admin_request());
 
 drop policy if exists "cell_marks_update_all" on public.cell_marks;
-create policy "cell_marks_update_all"
+drop policy if exists "cell_marks_admin_update" on public.cell_marks;
+create policy "cell_marks_admin_update"
 on public.cell_marks
 for update
 to anon
-using (true)
-with check (true);
+using (public.is_admin_request())
+with check (public.is_admin_request());
 
 drop policy if exists "cell_marks_delete_all" on public.cell_marks;
-create policy "cell_marks_delete_all"
+drop policy if exists "cell_marks_admin_delete" on public.cell_marks;
+create policy "cell_marks_admin_delete"
 on public.cell_marks
 for delete
 to anon
-using (true);
+using (public.is_admin_request());
 
 drop policy if exists "legend_items_read_all" on public.legend_items;
 create policy "legend_items_read_all"
@@ -200,26 +286,29 @@ to anon
 using (true);
 
 drop policy if exists "legend_items_insert_all" on public.legend_items;
-create policy "legend_items_insert_all"
+drop policy if exists "legend_items_admin_insert" on public.legend_items;
+create policy "legend_items_admin_insert"
 on public.legend_items
 for insert
 to anon
-with check (true);
+with check (public.is_admin_request());
 
 drop policy if exists "legend_items_update_all" on public.legend_items;
-create policy "legend_items_update_all"
+drop policy if exists "legend_items_admin_update" on public.legend_items;
+create policy "legend_items_admin_update"
 on public.legend_items
 for update
 to anon
-using (true)
-with check (true);
+using (public.is_admin_request())
+with check (public.is_admin_request());
 
 drop policy if exists "legend_items_delete_all" on public.legend_items;
-create policy "legend_items_delete_all"
+drop policy if exists "legend_items_admin_delete" on public.legend_items;
+create policy "legend_items_admin_delete"
 on public.legend_items
 for delete
 to anon
-using (true);
+using (public.is_admin_request());
 
 drop policy if exists "notes_read_all" on public.notes;
 create policy "notes_read_all"
@@ -229,26 +318,29 @@ to anon
 using (true);
 
 drop policy if exists "notes_insert_all" on public.notes;
-create policy "notes_insert_all"
+drop policy if exists "notes_admin_insert" on public.notes;
+create policy "notes_admin_insert"
 on public.notes
 for insert
 to anon
-with check (true);
+with check (public.is_admin_request());
 
 drop policy if exists "notes_update_all" on public.notes;
-create policy "notes_update_all"
+drop policy if exists "notes_admin_update" on public.notes;
+create policy "notes_admin_update"
 on public.notes
 for update
 to anon
-using (true)
-with check (true);
+using (public.is_admin_request())
+with check (public.is_admin_request());
 
 drop policy if exists "notes_delete_all" on public.notes;
-create policy "notes_delete_all"
+drop policy if exists "notes_admin_delete" on public.notes;
+create policy "notes_admin_delete"
 on public.notes
 for delete
 to anon
-using (true);
+using (public.is_admin_request());
 
 do $$
 begin
@@ -315,7 +407,12 @@ begin
   end if;
 end $$;
 
--- Optional: change password later
+-- Optional: change keys later
 -- update public.page_access
--- set password_hash = 'PASTE_NEW_SHA256_HASH_HERE'
+-- set admin_key_hash = 'PASTE_NEW_ADMIN_SHA256_HASH_HERE',
+--     password_hash = 'PASTE_NEW_ADMIN_SHA256_HASH_HERE'
+-- where id = 1;
+--
+-- update public.page_access
+-- set viewer_key_hash = 'PASTE_NEW_VIEWER_SHA256_HASH_HERE'
 -- where id = 1;
