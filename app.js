@@ -7,12 +7,12 @@ const APP_TITLE = String(APP_CONFIG.appTitle || 'Частотные отметк
 
 const BANDS = [
   { key: 'A', label: 'Band - A', channels: [5865, 5845, 5825, 5805, 5785, 5765, 5745, 5725] },
-  { key: 'B', label: 'Band - b', channels: [5733, 5752, 5771, 5790, 5809, 5828, 5847, 5866] },
+  { key: 'B', label: 'Band - B', channels: [5733, 5752, 5771, 5790, 5809, 5828, 5847, 5866] },
   { key: 'E', label: 'Band - E', channels: [5705, 5685, 5665, 5645, 5885, 5905, 5925, 5945] },
   { key: 'F', label: 'Band - F', channels: [5740, 5760, 5780, 5800, 5820, 5840, 5860, 5880] },
-  { key: 'R', label: 'Band - r', channels: [5658, 5695, 5732, 5769, 5806, 5843, 5880, 5917] },
+  { key: 'R', label: 'Band - R', channels: [5658, 5695, 5732, 5769, 5806, 5843, 5880, 5917] },
   { key: 'U', label: 'Band - U', channels: [5325, 5348, 5366, 5384, 5402, 5420, 5438, 5456] },
-  { key: 'O', label: 'Band - o', channels: [5474, 5492, 5510, 5528, 5546, 5564, 5582, 5600] },
+  { key: 'O', label: 'Band - O', channels: [5474, 5492, 5510, 5528, 5546, 5564, 5582, 5600] },
   { key: 'L', label: 'Band - L', channels: [5333, 5373, 5413, 5453, 5493, 5533, 5573, 5613] },
   { key: 'H', label: 'Band - H', channels: [5653, 5693, 5733, 5773, 5813, 5853, 5893, 5933] },
 ];
